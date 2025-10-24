@@ -1,49 +1,46 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   SMALL_FILE_THRESHOLD,
   MAX_CONCURRENT_SMALL,
   MAX_CONCURRENT_LARGE,
   MAX_CONCURRENT_INITIATES,
-  BASE_INITIATE_TIME,
-  BASE_UPLOAD_TIME,
-  TIMING_VARIANCE,
+  MAX_CONCURRENT_UPLOAD_TRIGGERS,
   type FileItem,
   type TimelineEntry,
+  type DemoMode,
 } from './types';
+import { resetCoordinator } from './coordinator';
 import { SlotGrid } from './components/SlotGrid';
 import { QueueDisplay } from './components/QueueDisplay';
 import { Stats } from './components/Stats';
 import { Timeline } from './components/Timeline';
 import { Controls } from './components/Controls';
 import { SpeedControl } from './components/SpeedControl';
+import { ModeToggle } from './components/ModeToggle';
+import { DualLayerVisualization } from './components/DualLayerVisualization';
+import { useSimulationEngine } from './hooks/useSimulationEngine';
+import { useFileManager } from './hooks/useFileManager';
+import { useRealMode } from './hooks/useRealMode';
 
 function App() {
-  const [fileCounter, setFileCounter] = useState(1);
+  // Demo mode
+  const [mode, setMode] = useState<DemoMode>('simulation');
+
+  // Phase 1: Initiate state
   const [activeInitiates, setActiveInitiates] = useState<FileItem[]>([]);
   const [initiateQueue, setInitiateQueue] = useState<FileItem[]>([]);
-  const [activeUploads, setActiveUploads] = useState<FileItem[]>([]);
-  const [uploadQueue, setUploadQueue] = useState<FileItem[]>([]);
+
+  // Phase 2: Upload state (dual concurrency)
+  const [activeTriggers, setActiveTriggers] = useState<FileItem[]>([]); // Max 10 (outer layer)
+  const [triggerQueue, setTriggerQueue] = useState<FileItem[]>([]); // Waiting for trigger slot
+  const [activeUploads, setActiveUploads] = useState<FileItem[]>([]); // 3-5 (inner layer)
+
+  // UI state
   const [completedCount, setCompletedCount] = useState(0);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [speed, setSpeed] = useState(0);
 
-  const speedRef = useRef(speed);
-  const fileCounterRef = useRef(1);
-  const activeInitiatesRef = useRef<FileItem[]>([]);
-  const activeUploadsRef = useRef<FileItem[]>([]);
-
-  useEffect(() => {
-    speedRef.current = speed;
-  }, [speed]);
-
-  useEffect(() => {
-    activeInitiatesRef.current = activeInitiates;
-  }, [activeInitiates]);
-
-  useEffect(() => {
-    activeUploadsRef.current = activeUploads;
-  }, [activeUploads]);
-
+  // Memoized slot arrays
   const initiateSlots = useMemo(
     () => Array.from({ length: MAX_CONCURRENT_INITIATES }, (_, i) => i),
     []
@@ -54,17 +51,22 @@ function App() {
     []
   );
 
+  // Derived state
   const hasLargeFile = activeUploads.some(f => f.size > SMALL_FILE_THRESHOLD);
   const currentLimit = hasLargeFile ? MAX_CONCURRENT_LARGE : MAX_CONCURRENT_SMALL;
-  const queueDepth = initiateQueue.length + uploadQueue.length;
-  const totalFiles = fileCounter - 1;
-  const activeCount = activeInitiates.length + activeUploads.length;
+  const queueDepth = initiateQueue.length + triggerQueue.length;
+  const activeCount = activeInitiates.length + activeTriggers.length;
 
-  const getRandomTiming = useCallback((baseTime: number): number => {
-    const variance = baseTime * TIMING_VARIANCE;
-    return baseTime + (Math.random() * variance * 2 - variance);
-  }, []);
+  // Visual trigger mapping - in simulation, just use activeTriggers directly
+  const visualUploadTriggers = useMemo(() => {
+    if (mode === 'simulation') {
+      return activeTriggers;
+    }
+    // In real mode, we don't show triggers separately
+    return [];
+  }, [mode, activeTriggers]);
 
+  // Timeline management
   const addToTimeline = useCallback((message: string, type: TimelineEntry['type'] = 'phase2') => {
     const time = new Date().toLocaleTimeString('en-US', {
       hour12: false,
@@ -75,6 +77,15 @@ function App() {
     });
 
     setTimeline(prev => {
+      // Prevent duplicates (StrictMode guard)
+      const isDuplicate = prev.some(entry =>
+        entry.message === message &&
+        entry.type === type &&
+        entry.time === time
+      );
+
+      if (isDuplicate) return prev;
+
       const newEntry: TimelineEntry = {
         id: `${Date.now()}-${Math.random()}`,
         time,
@@ -85,260 +96,59 @@ function App() {
     });
   }, []);
 
-  const addFile = useCallback((size: number) => {
-    // Use ref to get current counter and increment atomically
-    const currentCounter = fileCounterRef.current;
-    fileCounterRef.current += 1;
-    setFileCounter(fileCounterRef.current);
+  // File manager hook
+  const { addFile, fileCounter, resetCounter } = useFileManager({
+    activeInitiates,
+    onUpdateInitiates: setActiveInitiates,
+    onUpdateInitiateQueue: setInitiateQueue,
+    onAddToTimeline: addToTimeline,
+  });
 
-    const fileId = `File${currentCounter}`;
-    const file: FileItem = {
-      id: fileId,
-      size,
-      key: `${fileId}-${Date.now()}-${Math.random()}`, // Add random suffix for uniqueness
-      progress: 0,
-      uploadProgress: 0,
-      initiateTime: getRandomTiming(BASE_INITIATE_TIME),
-      uploadTime: getRandomTiming(BASE_UPLOAD_TIME)
-    };
+  // Simulation engine hook
+  useSimulationEngine({
+    speed,
+    activeInitiates,
+    initiateQueue,
+    activeTriggers,
+    triggerQueue,
+    activeUploads,
+    onUpdateInitiates: setActiveInitiates,
+    onUpdateInitiateQueue: setInitiateQueue,
+    onUpdateTriggers: setActiveTriggers,
+    onUpdateTriggerQueue: setTriggerQueue,
+    onUpdateUploads: setActiveUploads,
+    onAddToTimeline: addToTimeline,
+    onIncrementCompleted: (count) => setCompletedCount(prev => prev + count),
+  });
 
-    const currentActive = activeInitiatesRef.current;
-    if (currentActive.length < MAX_CONCURRENT_INITIATES) {
-      setActiveInitiates(active => {
-        // Double-check we're not already adding this file (StrictMode guard)
-        if (active.some(f => f.id === fileId)) {
-          return active;
-        }
+  // Real mode hook
+  const { runReal, isRunningReal } = useRealMode({
+    mode,
+    activeInitiates,
+    initiateQueue,
+    uploadTriggers: activeTriggers,
+    activeUploads,
+    uploadQueue: triggerQueue,
+    onAddToTimeline: addToTimeline,
+  });
 
-        const newFile = {
-          ...file,
-          startTime: Date.now()
-        };
-        const updatedActive = [...active, newFile];
-        addToTimeline(
-          `🟡 "${fileId}" (${size}MB) - initiate started immediately [${updatedActive.length}/${MAX_CONCURRENT_INITIATES}]`,
-          'phase1'
-        );
-        return updatedActive;
-      });
-    } else {
-      setInitiateQueue(queue => {
-        // Double-check we're not already adding this file (StrictMode guard)
-        if (queue.some(f => f.id === fileId)) {
-          return queue;
-        }
-
-        addToTimeline(`⏳ "${fileId}" (${size}MB) queued for initiate`, 'phase1');
-        return [...queue, file];
-      });
-    }
-  }, [addToTimeline, getRandomTiming]);
-
-  useEffect(() => {
-    if (speed === 0) return;
-
-    const interval = setInterval(() => {
-      const currentSpeed = speedRef.current;
-      if (currentSpeed === 0) return;
-
-      const tickAmount = currentSpeed / 100;
-
-      // Process initiate queue - start new initiates if slots available
-      setInitiateQueue(prevQueue => {
-        if (prevQueue.length === 0) return prevQueue;
-
-        const currentActive = activeInitiatesRef.current;
-        const slotsAvailable = MAX_CONCURRENT_INITIATES - currentActive.length;
-
-        if (slotsAvailable <= 0) return prevQueue;
-
-        const toStart = prevQueue.slice(0, slotsAvailable);
-
-        if (toStart.length === 0) return prevQueue;
-
-        setActiveInitiates(active => {
-          const newActive = toStart.map(file => ({
-            ...file,
-            startTime: Date.now()
-          }));
-
-          const updatedActive = [...active, ...newActive];
-
-          newActive.forEach(file => {
-            addToTimeline(
-              `🟡 "${file.id}" (${file.size}MB) - initiate started [${updatedActive.length}/${MAX_CONCURRENT_INITIATES}]`,
-              'phase1'
-            );
-          });
-
-          return updatedActive;
-        });
-
-        return prevQueue.slice(toStart.length);
-      });
-
-      // Update active initiates progress
-      setActiveInitiates(active => {
-        if (active.length === 0) return active;
-
-        const completed: FileItem[] = [];
-        const remaining: FileItem[] = [];
-
-        active.forEach(file => {
-          const newProgress = Math.min(file.progress + tickAmount * (1000 / file.initiateTime), 1);
-
-          if (newProgress >= 1) {
-            completed.push(file);
-
-            // Check if we can add this file to uploads immediately
-            const currentUploads = activeUploadsRef.current;
-
-            // Calculate what the limit would be if we add this file
-            const wouldHaveLargeFile = currentUploads.some(f => f.size > SMALL_FILE_THRESHOLD) ||
-                                       file.size > SMALL_FILE_THRESHOLD;
-            const effectiveMaxSlots = wouldHaveLargeFile ? MAX_CONCURRENT_LARGE : MAX_CONCURRENT_SMALL;
-
-            if (currentUploads.length < effectiveMaxSlots) {
-              setActiveUploads(uploads => {
-                // Guard against duplicates (StrictMode protection)
-                if (uploads.some(f => f.id === file.id)) {
-                  return uploads;
-                }
-
-                const newFile = {
-                  ...file,
-                  uploadStartTime: Date.now()
-                };
-                const updatedUploads = [...uploads, newFile];
-                const mode = updatedUploads.some(f => f.size > SMALL_FILE_THRESHOLD)
-                  ? '🔴 LARGE mode'
-                  : '🟢 SMALL mode';
-
-                addToTimeline(
-                  `✓ "${file.id}" initiate complete → upload started immediately [${updatedUploads.length}/${effectiveMaxSlots}] ${mode}`,
-                  'phase2'
-                );
-
-                return updatedUploads;
-              });
-            } else {
-              setUploadQueue(queue => {
-                // Guard against duplicates (StrictMode protection)
-                if (queue.some(f => f.id === file.id)) {
-                  return queue;
-                }
-
-                addToTimeline(`✓ "${file.id}" initiate complete → queued for upload`, 'phase1');
-                return [...queue, file];
-              });
-            }
-          } else {
-            remaining.push({ ...file, progress: newProgress });
-          }
-        });
-
-        return remaining;
-      });
-
-      // Process upload queue - add files one at a time, recalculating limits
-      setUploadQueue(prevQueue => {
-        if (prevQueue.length === 0) return prevQueue;
-
-        const currentActive = activeUploadsRef.current;
-
-        // Add files one at a time, recalculating limit after each
-        const toStart: FileItem[] = [];
-        let tempActive = [...currentActive];
-
-        for (const file of prevQueue) {
-          // Recalculate limit considering files we're about to add
-          const currentMax = tempActive.some(f => f.size > SMALL_FILE_THRESHOLD)
-            ? MAX_CONCURRENT_LARGE
-            : MAX_CONCURRENT_SMALL;
-
-          if (tempActive.length >= currentMax) break;
-
-          toStart.push(file);
-          tempActive.push(file); // Simulate adding it
-        }
-
-        if (toStart.length === 0) return prevQueue;
-
-        setActiveUploads(active => {
-          // Filter out any files already in active uploads (StrictMode protection)
-          const filesToAdd = toStart.filter(file => !active.some(a => a.id === file.id));
-
-          if (filesToAdd.length === 0) {
-            return active; // Nothing new to add
-          }
-
-          const newActive = filesToAdd.map(file => ({
-            ...file,
-            uploadStartTime: Date.now()
-          }));
-
-          const allFiles = [...active, ...newActive];
-          const finalMax = allFiles.some(f => f.size > SMALL_FILE_THRESHOLD)
-            ? MAX_CONCURRENT_LARGE
-            : MAX_CONCURRENT_SMALL;
-          const mode = allFiles.some(f => f.size > SMALL_FILE_THRESHOLD)
-            ? '🔴 LARGE mode'
-            : '🟢 SMALL mode';
-
-          newActive.forEach(file => {
-            addToTimeline(
-              `🔵 "${file.id}" (${file.size}MB) - upload started [${allFiles.length}/${finalMax}] ${mode}`,
-              'phase2'
-            );
-          });
-
-          return allFiles;
-        });
-
-        return prevQueue.slice(toStart.length);
-      });
-
-      // Update active uploads progress
-      setActiveUploads(active => {
-        if (active.length === 0) return active;
-
-        const completed: FileItem[] = [];
-        const remaining: FileItem[] = [];
-
-        active.forEach(file => {
-          const newProgress = Math.min(file.uploadProgress + tickAmount * (1000 / file.uploadTime), 1);
-
-          if (newProgress >= 1) {
-            completed.push(file);
-            addToTimeline(`✅ "${file.id}" upload completed`, 'complete');
-          } else {
-            remaining.push({ ...file, uploadProgress: newProgress });
-          }
-        });
-
-        if (completed.length > 0) {
-          setCompletedCount(prev => prev + completed.length);
-        }
-
-        return remaining;
-      });
-    }, 10);
-
-    return () => clearInterval(interval);
-  }, [speed, addToTimeline]);
-
+  // Reset function
   const reset = useCallback(() => {
-    fileCounterRef.current = 1;
-    setFileCounter(1);
+    resetCounter();
     setActiveInitiates([]);
     setInitiateQueue([]);
+    setActiveTriggers([]);
+    setTriggerQueue([]);
     setActiveUploads([]);
-    setUploadQueue([]);
     setCompletedCount(0);
     setTimeline([]);
     setSpeed(0);
+    resetCoordinator();
     addToTimeline('🔄 System reset', 'complete');
-  }, [addToTimeline]);
+  }, [addToTimeline, resetCounter]);
+
+  // Calculate total files
+  const totalFiles = fileCounter - 1;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-600 to-blue-900 p-6">
@@ -350,61 +160,97 @@ function App() {
           )}
         </h1>
         <p className="text-center text-gray-400 mb-6 text-sm">
-          Dynamic slot allocation • Randomized network timing (±30%) • Adaptive semaphore pattern
+          Generator Pattern + Dual Concurrency • Dynamic slot allocation • Adaptive bandwidth management
         </p>
 
-        <SpeedControl speed={speed} onSpeedChange={setSpeed} />
+        <ModeToggle mode={mode} onModeChange={setMode} disabled={speed > 0 || isRunningReal} />
 
-        <Controls onAddFile={addFile} onReset={reset} />
-
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
-          <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-100">Phase 1: Active Initiates</h2>
-              <span className="px-3 py-1 text-white text-xs font-bold rounded-full bg-green-600 shadow-[0_0_20px_rgba(16,185,129,0.5)]">
-                Max 10
-              </span>
-            </div>
-
-            <SlotGrid
-              slots={initiateSlots}
-              activeFiles={activeInitiates}
-              type="initiate"
-            />
-
-            <QueueDisplay
-              queue={initiateQueue}
-              title="Queued for Initiate"
-            />
-          </div>
-
-          <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-100">Phase 2: Active Uploads</h2>
-              <span
-                className={`px-3 py-1 text-white text-xs font-bold rounded-full ${
-                  hasLargeFile
-                    ? 'bg-red-600 shadow-[0_0_20px_rgba(244,63,94,0.5)]'
-                    : 'bg-green-600 shadow-[0_0_20px_rgba(16,185,129,0.5)]'
-                }`}
-              >
-                {hasLargeFile ? 'Large Mode (3)' : 'Small Mode (5)'}
-              </span>
-            </div>
-
-            <SlotGrid
-              slots={uploadSlots}
-              activeFiles={activeUploads}
-              type="upload"
-              currentLimit={currentLimit}
-            />
-
-            <QueueDisplay
-              queue={uploadQueue}
-              title="Queued for Upload"
-            />
-          </div>
+        <div className="flex gap-4 flex-wrap align-middle mb-8 items-center justify-between">
+          <Controls onAddFile={addFile} onReset={reset} />
+          {mode === 'simulation' && <SpeedControl speed={speed} onSpeedChange={setSpeed} />}
         </div>
+
+        {mode === 'real' && (
+          <div className="mb-6">
+            <button
+              onClick={runReal}
+              disabled={isRunningReal || speed > 0}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
+                isRunningReal || speed > 0
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-500 hover:to-emerald-500 shadow-lg shadow-green-500/50'
+              }`}
+            >
+              {isRunningReal ? '⏳ Running Real Upload...' : '⚡ Run Real Upload Coordination'}
+            </button>
+            <p className="text-xs text-center text-gray-400 mt-2">
+              Executes <code className="text-cyan-400 bg-gray-800 px-1 rounded">coordinateUploads()</code> from coordinator.ts with real async operations
+            </p>
+          </div>
+        )}
+
+        {mode === 'simulation' ? (
+          <>
+            {/* Phase 1: Initiates */}
+            <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-100">Phase 1: Active Initiates</h2>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Generator pattern: Only <span className="text-yellow-300 font-semibold">10 promises created</span> at a time
+                  </p>
+                </div>
+                <span className="px-3 py-1 text-white text-xs font-bold rounded-full bg-yellow-600 shadow-[0_0_20px_rgba(234,179,8,0.5)]">
+                  Max {MAX_CONCURRENT_INITIATES}
+                </span>
+              </div>
+
+              <SlotGrid
+                slots={initiateSlots}
+                activeFiles={activeInitiates}
+                type="initiate"
+              />
+
+              <QueueDisplay
+                queue={initiateQueue}
+                title="Queued for Initiate"
+              />
+
+              {initiateQueue.length > 0 && (
+                <p className="text-xs text-yellow-400 italic mt-2 text-center">
+                  💡 Generator only yields {MAX_CONCURRENT_INITIATES} initiate promises at a time (lazy evaluation)
+                </p>
+              )}
+            </div>
+
+            {/* Phase 2: Dual Layer Visualization */}
+            <DualLayerVisualization
+              uploadTriggers={visualUploadTriggers}
+              triggerQueue={triggerQueue}
+              gatekeeperQueue={activeTriggers.filter(t => t.triggerState === 'waiting-at-gatekeeper')}
+              activeUploads={activeUploads}
+              uploadSlots={uploadSlots}
+              currentLimit={currentLimit}
+              hasLargeFile={hasLargeFile}
+            />
+          </>
+        ) : (
+          <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
+            <h2 className="text-2xl font-bold text-gray-100 mb-4">Real Mode</h2>
+            <p className="text-gray-400 mb-4">
+              Add files using the controls above, then click "Run Real Upload Coordination" to
+              execute the actual generator pattern with real async operations.
+            </p>
+            <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-4">
+              <div className="text-sm text-green-300 space-y-2">
+                <div>✓ Uses <code className="bg-gray-800 px-1 rounded">processConcurrently()</code> from coordinator.ts</div>
+                <div>✓ Lazy promise creation with generators</div>
+                <div>✓ Dual concurrency: 10 triggers → 3-5 bandwidth slots</div>
+                <div>✓ Real async timing with acquireUploadSlot() gatekeeper</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <Stats
           totalFiles={totalFiles}

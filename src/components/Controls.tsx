@@ -5,7 +5,7 @@ type ControlsProps = {
 
 export function Controls({ onAddFile, onReset }: ControlsProps) {
   return (
-    <div className="flex gap-3 justify-center mb-8 flex-wrap">
+    <div className="flex gap-3 justify-center flex-wrap">
       <button
         onClick={() => onAddFile(30)}
         className="px-6 py-2.5 text-white rounded-lg font-semibold transform hover:-translate-y-0.5 transition-all bg-gradient-to-r from-green-600 to-teal-500 border border-green-500/50 hover:shadow-[0_10px_25px_-5px_rgba(16,185,129,0.5)]"

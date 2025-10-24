@@ -6,7 +6,7 @@ type TimelineProps = {
 
 export function Timeline({ timeline }: TimelineProps) {
   return (
-    <div className="rounded-xl p-4 overflow-y-auto bg-slate-900/50 border border-slate-700/50 max-h-64">
+    <div className="rounded-xl p-4 overflow-y-auto bg-slate-900/50 border border-slate-700/50 max-h-72">
       <h3 className="font-bold text-gray-200 mb-3">Timeline</h3>
       <div className="space-y-1">
         {timeline.map(entry => (

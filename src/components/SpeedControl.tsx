@@ -5,7 +5,7 @@ type SpeedControlProps = {
 
 export function SpeedControl({ speed, onSpeedChange }: SpeedControlProps) {
   return (
-    <div className="bg-gray-700/50 rounded-xl p-4 mb-6 border border-gray-600/50">
+    <div className="bg-gray-700/50 rounded-xl p-4 border border-gray-600/50">
       <div className="flex items-center justify-center gap-4">
         <span className="text-sm font-semibold text-gray-300">Speed:</span>
         <span className="text-sm text-gray-400">Paused</span>
