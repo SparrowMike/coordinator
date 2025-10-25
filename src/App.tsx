@@ -18,11 +18,17 @@ import { Controls } from './components/Controls';
 import { SpeedControl } from './components/SpeedControl';
 import { ModeToggle } from './components/ModeToggle';
 import { DualLayerVisualization } from './components/DualLayerVisualization';
+import { GeneratorGuide } from './components/GeneratorGuide';
 import { useSimulationEngine } from './hooks/useSimulationEngine';
 import { useFileManager } from './hooks/useFileManager';
 import { useRealMode } from './hooks/useRealMode';
 
+type TabType = 'demo' | 'guide';
+
 function App() {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<TabType>('demo');
+
   // Demo mode
   const [mode, setMode] = useState<DemoMode>('simulation');
 
@@ -163,105 +169,139 @@ function App() {
           Generator Pattern + Dual Concurrency • Dynamic slot allocation • Adaptive bandwidth management
         </p>
 
-        <ModeToggle mode={mode} onModeChange={setMode} disabled={speed > 0 || isRunningReal} />
-
-        <div className="flex gap-4 flex-wrap align-middle mb-8 items-center justify-between">
-          <Controls onAddFile={addFile} onReset={reset} />
-          {mode === 'simulation' && <SpeedControl speed={speed} onSpeedChange={setSpeed} />}
+        {/* Tab Navigation */}
+        <div className="flex gap-2 mb-6 border-b border-gray-600">
+          <button
+            onClick={() => setActiveTab('demo')}
+            className={`px-6 py-3 font-semibold transition-all ${
+              activeTab === 'demo'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            🎮 Interactive Demo
+          </button>
+          <button
+            onClick={() => setActiveTab('guide')}
+            className={`px-6 py-3 font-semibold transition-all ${
+              activeTab === 'guide'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            📚 Learn Generators
+          </button>
         </div>
 
-        {mode === 'real' && (
-          <div className="mb-6">
-            <button
-              onClick={runReal}
-              disabled={isRunningReal || speed > 0}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
-                isRunningReal || speed > 0
-                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-500 hover:to-emerald-500 shadow-lg shadow-green-500/50'
-              }`}
-            >
-              {isRunningReal ? '⏳ Running Real Upload...' : '⚡ Run Real Upload Coordination'}
-            </button>
-            <p className="text-xs text-center text-gray-400 mt-2">
-              Executes <code className="text-cyan-400 bg-gray-800 px-1 rounded">coordinateUploads()</code> from coordinator.ts with real async operations
-            </p>
-          </div>
-        )}
-
-        {mode === 'simulation' ? (
+        {/* Tab Content */}
+        {activeTab === 'demo' ? (
           <>
-            {/* Phase 1: Initiates */}
-            <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-100">Phase 1: Active Initiates</h2>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Generator pattern: Only <span className="text-yellow-300 font-semibold">10 promises created</span> at a time
-                  </p>
-                </div>
-                <span className="px-3 py-1 text-white text-xs font-bold rounded-full bg-yellow-600 shadow-[0_0_20px_rgba(234,179,8,0.5)]">
-                  Max {MAX_CONCURRENT_INITIATES}
-                </span>
-              </div>
+            <ModeToggle mode={mode} onModeChange={setMode} disabled={speed > 0 || isRunningReal} />
 
-              <SlotGrid
-                slots={initiateSlots}
-                activeFiles={activeInitiates}
-                type="initiate"
-              />
-
-              <QueueDisplay
-                queue={initiateQueue}
-                title="Queued for Initiate"
-              />
-
-              {initiateQueue.length > 0 && (
-                <p className="text-xs text-yellow-400 italic mt-2 text-center">
-                  💡 Generator only yields {MAX_CONCURRENT_INITIATES} initiate promises at a time (lazy evaluation)
-                </p>
-              )}
+            <div className="flex gap-4 flex-wrap align-middle mb-8 items-center justify-between bg-gray-700/50 rounded-xl p-4 border border-gray-600/50">
+              <Controls onAddFile={addFile} onReset={reset} />
+              {mode === 'simulation' && <SpeedControl speed={speed} onSpeedChange={setSpeed} />}
             </div>
 
-            {/* Phase 2: Dual Layer Visualization */}
-            <DualLayerVisualization
-              uploadTriggers={visualUploadTriggers}
-              triggerQueue={triggerQueue}
-              gatekeeperQueue={activeTriggers.filter(t => t.triggerState === 'waiting-at-gatekeeper')}
-              activeUploads={activeUploads}
-              uploadSlots={uploadSlots}
+            {mode === 'real' && (
+              <div className="mb-6">
+                <button
+                  onClick={runReal}
+                  disabled={isRunningReal || speed > 0}
+                  className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
+                    isRunningReal || speed > 0
+                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-500 hover:to-emerald-500 shadow-lg shadow-green-500/50'
+                  }`}
+                >
+                  {isRunningReal ? '⏳ Running Real Upload...' : '⚡ Run Real Upload Coordination'}
+                </button>
+                <p className="text-xs text-center text-gray-400 mt-2">
+                  Executes <code className="text-cyan-400 bg-gray-800 px-1 rounded">coordinateUploads()</code> from coordinator.ts with real async operations
+                </p>
+              </div>
+            )}
+
+            {mode === 'simulation' ? (
+              <>
+                {/* Phase 1: Initiates */}
+                <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-100">Phase 1: Active Initiates</h2>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Generator pattern: Only <span className="text-yellow-300 font-semibold">10 promises created</span> at a time
+                      </p>
+                    </div>
+                    <span className="px-3 py-1 text-white text-xs font-bold rounded-full bg-yellow-600 shadow-[0_0_20px_rgba(234,179,8,0.5)]">
+                      Max {MAX_CONCURRENT_INITIATES}
+                    </span>
+                  </div>
+
+                  <SlotGrid
+                    slots={initiateSlots}
+                    activeFiles={activeInitiates}
+                    type="initiate"
+                  />
+
+                  <QueueDisplay
+                    queue={initiateQueue}
+                    title="Queued for Initiate"
+                  />
+
+                  {initiateQueue.length > 0 && (
+                    <p className="text-xs text-yellow-400 italic mt-2 text-center">
+                      💡 Generator only yields {MAX_CONCURRENT_INITIATES} initiate promises at a time (lazy evaluation)
+                    </p>
+                  )}
+                </div>
+
+                {/* Phase 2: Dual Layer Visualization */}
+                <DualLayerVisualization
+                  uploadTriggers={visualUploadTriggers}
+                  triggerQueue={triggerQueue}
+                  gatekeeperQueue={activeTriggers.filter(t => t.triggerState === 'waiting-at-gatekeeper')}
+                  activeUploads={activeUploads}
+                  uploadSlots={uploadSlots}
+                  currentLimit={currentLimit}
+                  hasLargeFile={hasLargeFile}
+                />
+              </>
+            ) : (
+              <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
+                <h2 className="text-2xl font-bold text-gray-100 mb-4">Real Mode</h2>
+                <p className="text-gray-400 mb-4">
+                  Add files using the controls above, then click "Run Real Upload Coordination" to
+                  execute the actual generator pattern with real async operations.
+                </p>
+                <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-4">
+                  <div className="text-sm text-green-300 space-y-2">
+                    <div>✓ Uses <code className="bg-gray-800 px-1 rounded">processConcurrently()</code> from coordinator.ts</div>
+                    <div>✓ Lazy promise creation with generators</div>
+                    <div>✓ Dual concurrency: 10 triggers → 3-5 bandwidth slots</div>
+                    <div>✓ Real async timing with acquireUploadSlot() gatekeeper</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <Stats
+              totalFiles={totalFiles}
+              activeCount={activeCount}
+              completedCount={completedCount}
               currentLimit={currentLimit}
+              queueDepth={queueDepth}
               hasLargeFile={hasLargeFile}
             />
+
+            <Timeline timeline={timeline} />
           </>
         ) : (
-          <div className="rounded-xl p-6 bg-gray-700/30 border border-gray-600/50 mb-6">
-            <h2 className="text-2xl font-bold text-gray-100 mb-4">Real Mode</h2>
-            <p className="text-gray-400 mb-4">
-              Add files using the controls above, then click "Run Real Upload Coordination" to
-              execute the actual generator pattern with real async operations.
-            </p>
-            <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-4">
-              <div className="text-sm text-green-300 space-y-2">
-                <div>✓ Uses <code className="bg-gray-800 px-1 rounded">processConcurrently()</code> from coordinator.ts</div>
-                <div>✓ Lazy promise creation with generators</div>
-                <div>✓ Dual concurrency: 10 triggers → 3-5 bandwidth slots</div>
-                <div>✓ Real async timing with acquireUploadSlot() gatekeeper</div>
-              </div>
-            </div>
+          /* Generator Guide Tab */
+          <div className="rounded-xl overflow-y-auto">
+            <GeneratorGuide />
           </div>
         )}
-
-        <Stats
-          totalFiles={totalFiles}
-          activeCount={activeCount}
-          completedCount={completedCount}
-          currentLimit={currentLimit}
-          queueDepth={queueDepth}
-          hasLargeFile={hasLargeFile}
-        />
-
-        <Timeline timeline={timeline} />
       </div>
     </div>
   );
